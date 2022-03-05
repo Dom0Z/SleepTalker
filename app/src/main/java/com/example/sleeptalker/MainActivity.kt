@@ -12,10 +12,20 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import kotlinx.android.synthetic.main.activity_main.*
 import android.Manifest
+import android.content.ContentUris
+import android.content.Context
+import android.database.Cursor
+import android.os.Build
+import android.os.Environment
+import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
+import android.util.Log
+import android.widget.Toast
 import com.example.sleeptalker.permissionUtils.OnPermissionDeniedListener
 import com.example.sleeptalker.permissionUtils.OnPermissionGrantedListener
 import com.example.sleeptalker.permissionUtils.OnPermissionPermanentlyDeniedListener
-
+import java.io.File
+import java.io.FileDescriptor
 
 
 class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
@@ -97,19 +107,55 @@ class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
     }
 
     private fun stopAudio() {
-        TODO("Not yet implemented")
+        if (mediaPlayer != null) {
+            if (mediaPlayer!!.isPlaying) {
+                currentPosition = 0
+                mediaPlayer?.stop()
+                mediaPlayer?.release()
+                mediaPlayer = null
+                Toast.makeText(this, "Recording playing stopped", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun resumeAudio() {
-        TODO("Not yet implemented")
+        if (mediaPlayer != null) {
+            mediaPlayer?.start()
+            mediaPlayer?.seekTo(currentPosition)
+            Toast.makeText(this, "Recording playing resumed", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun pauseAudio() {
-        TODO("Not yet implemented")
+        if (mediaPlayer != null) {
+            if (mediaPlayer?.isPlaying!!) {
+                currentPosition = mediaPlayer?.currentPosition!!
+                mediaPlayer?.pause()
+                Toast.makeText(this, "Recording playing paused", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun playAudio() {
-        TODO("Not yet implemented")
+        if (isRecordingStopped) {
+            try {
+                mediaPlayer = MediaPlayer()
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    mediaPlayer!!.setDataSource(getFilePath())
+                    //00445262
+                } else {
+                    mediaPlayer!!.setDataSource(getFileDescriptor2())
+                }
+                mediaPlayer!!.prepare()
+                mediaPlayer!!.start()
+                Toast.makeText(this, "Recording is playing", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+    fun checkSinglePermission(permission: String) {
+        requestSinglePermission.launch(permission)
     }
 
     val requestSinglePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
@@ -126,9 +172,65 @@ class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
         else onPermissionGrantedListener.OnPermissionGranted()
 
     }
-    fun checkSinglePermission(permission: String) {
-        requestSinglePermission.launch(permission)
+
+    private fun getFilePath(): String {
+        var directory: File? =
+            getAppSpecificAlbumStorageDir(this, Environment.DIRECTORY_MUSIC, "DomoDemo")
+        var file: File = File(directory, "test_audio.mp3")
+        return file.absolutePath
     }
+    fun getAppSpecificAlbumStorageDir(context: Context, albumName: String, subAlbumName: String): File? {
+        // Get the Audio directory that's inside the app-specific directory on
+        // external storage.
+        val file = File(
+            context.getExternalFilesDir(
+                albumName
+            ), subAlbumName
+        )
+        if (!file?.mkdirs()) {
+            Log.e("fssfsf", "Directory not created")
+        }
+
+        return file
+    }
+    private fun getFileDescriptor(): FileDescriptor {
+        var displayName: String? = null
+        var relativePath: String? = null
+        var media_id: String? = null
+        val filePathColumn =
+            arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DISPLAY_NAME)
+        var uri = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        val selection = "${MediaStore.Audio.Media.DISPLAY_NAME} = ?"
+        val selectionArgs = arrayOf("test_domo_audio.mp3")
+        var cursor: Cursor? = null
+        try {
+            cursor = getContentResolver().query(uri, filePathColumn, selection, selectionArgs, null)
+            if (cursor != null) {
+                //cursor.moveToFirst()
+                while (cursor.moveToNext()) {
+                    var idColumn: Int = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                    var nameColumn: Int =
+                        cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+                    val uri: Uri = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+                    relativePath =
+                        ContentUris.withAppendedId(uri, cursor.getLong(idColumn)).toString()
+                    displayName = cursor.getString(nameColumn)
+                    media_id = cursor.getLong(idColumn).toString()
+
+                }
+            }
+        } finally {
+            if (cursor != null) {
+                cursor.close()
+            }
+        }
+    }
+    private fun getFileDescriptor2(): FileDescriptor {
+        var parcelFileDescriptor: ParcelFileDescriptor =
+            contentResolver.openFileDescriptor(audioUri!!, "r")!!
+        return parcelFileDescriptor.fileDescriptor
+    }
+
 
     override fun OnPermissionDenied() {
         TODO("Not yet implemented")
