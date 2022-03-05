@@ -12,15 +12,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import kotlinx.android.synthetic.main.activity_main.*
 import android.Manifest
-import android.content.ContentUris
-import android.content.Context
+import android.annotation.TargetApi
+import android.content.*
 import android.database.Cursor
 import android.os.Build
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import com.example.sleeptalker.permissionUtils.OnPermissionDeniedListener
 import com.example.sleeptalker.permissionUtils.OnPermissionGrantedListener
 import com.example.sleeptalker.permissionUtils.OnPermissionPermanentlyDeniedListener
@@ -105,6 +107,15 @@ class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
 
 
     }
+    private fun stopRecord() {
+        if (mediaRecorder != null) {
+            mediaRecorder?.stop()
+            mediaRecorder?.release()
+            mediaRecorder = null
+            isRecordingStopped = true
+            Toast.makeText(this, "Recording is stopped", Toast.LENGTH_LONG).show()
+        }
+    }
 
     private fun stopAudio() {
         if (mediaPlayer != null) {
@@ -154,6 +165,33 @@ class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
             }
         }
     }
+    override fun onPause() {
+        if(!isRecordingStopped){
+            stopRecord()
+        }else{
+            stopAudio()
+        }
+        super.onPause()
+    }
+    private fun recordAudio() {
+        try {
+            isRecordingStopped = false
+            mediaRecorder = MediaRecorder()
+            mediaRecorder!!.setAudioSource(MediaRecorder.AudioSource.MIC)
+            mediaRecorder!!.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                mediaRecorder!!.setOutputFile(getFilePath())
+            } else {
+                mediaRecorder!!.setOutputFile(getFileDescriptor())
+            }
+            mediaRecorder!!.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+            mediaRecorder!!.prepare()
+            mediaRecorder!!.start()
+            Toast.makeText(this, "Recording is started", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
     fun checkSinglePermission(permission: String) {
         requestSinglePermission.launch(permission)
     }
@@ -176,13 +214,13 @@ class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
     private fun getFilePath(): String {
         var directory: File? =
             getAppSpecificAlbumStorageDir(this, Environment.DIRECTORY_MUSIC, "DomoDemo")
-        var file: File = File(directory, "test_audio.mp3")
+        var file = File(directory, "test_audio.mp3")
         return file.absolutePath
     }
     fun getAppSpecificAlbumStorageDir(context: Context, albumName: String, subAlbumName: String): File? {
         // Get the Audio directory that's inside the app-specific directory on
         // external storage.
-        val file = File(
+        val file: File = File(
             context.getExternalFilesDir(
                 albumName
             ), subAlbumName
@@ -224,25 +262,124 @@ class MainActivity : AppCompatActivity(),OnPermissionPermanentlyDeniedListener,
                 cursor.close()
             }
         }
+        var mimeType = "audio/*"
+        var resolver: ContentResolver = applicationContext.contentResolver
+        var audioCollection: Uri = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        val values = ContentValues().apply {
+            put(MediaStore.Audio.Media.DISPLAY_NAME, "test_Domo_audio.mp3")
+            //put(MediaStore.Audio.Media.TITLE, "test_audio")
+            put(MediaStore.Audio.Media.MIME_TYPE, mimeType)
+            put(MediaStore.Audio.Media.RELATIVE_PATH, getAudioDirectoryPath())
+            //put(MediaStore.Audio.Media.IS_PENDING, 1)
+        }
+        if (!relativePath.isNullOrEmpty()) {
+            audioUri = Uri.parse(relativePath)
+        } else {
+            audioUri = resolver.insert(audioCollection, values)
+        }
+        var parcelFileDescriptor: ParcelFileDescriptor =
+            resolver.openFileDescriptor(audioUri!!, "wt")!!
+        return parcelFileDescriptor.fileDescriptor
     }
     private fun getFileDescriptor2(): FileDescriptor {
         var parcelFileDescriptor: ParcelFileDescriptor =
             contentResolver.openFileDescriptor(audioUri!!, "r")!!
         return parcelFileDescriptor.fileDescriptor
     }
+    fun getAudioDirectoryPath(): String{
+        return Environment.DIRECTORY_MUSIC + File.separator + "DomoDemo" + File.separator
+    }
+    fun ShowPrompt(isPermanentlyDenied: Boolean) {
+        val alertBuilder = AlertDialog.Builder(this)
+        alertBuilder.setCancelable(true)
+        alertBuilder.setTitle("Permission necessary")
+        alertBuilder.setMessage("Allow this app to access Photos and videos?")
+        alertBuilder.setPositiveButton(
+            android.R.string.yes,
+            object : DialogInterface.OnClickListener {
+                @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+                override fun onClick(dialog: DialogInterface, which: Int) {
+                    //hasPermissions(context,permissions);
+                    if (isPermanentlyDenied) {
+                        showSettings()
+                    } else {
+                        checkPermissions()
+                    }
+                }
+            })
+        val alert = alertBuilder.create()
+        alert.show()
+    }
+
+    fun showSettings() {
+        val intent = Intent()
+        intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+        val uri = Uri.fromParts("package", packageName, null)
+        intent.data = uri
+        startActivity(intent)
+    }
+    fun checkPermissions() {
+        requestMultiplePermissions.launch(
+            arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.RECORD_AUDIO,
+            )
+        )
+
+    }
+
+    val requestMultiplePermissions =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            var isDenied = 2
+            permissions.entries.forEach {
+                if (it.value == false) {
+                    var showRationale1: Boolean = shouldShowRequestPermissionRationale(it.key)
+                    if (!showRationale1) {
+                        isDenied = 0
+                    } else {
+                        isDenied = 1
+                    }
+                }
+                Log.e("DEBUG", "${it.key} = ${it.value}")
+            }
+            if (isDenied == 1) onPermissionDeniedListener.OnPermissionDenied()
+            else if (isDenied == 0) onPermissionPermanentlyDeniedListener.OnPermissionPermanentlyDenied()
+            else onPermissionGrantedListener.OnPermissionGranted()
+
+        }
+
+
+
 
 
     override fun OnPermissionDenied() {
-        TODO("Not yet implemented")
+        ShowPrompt(false)
     }
 
     override fun OnPermissionGranted() {
-        TODO("Not yet implemented")
+        if (isRecordButtonClicked) {
+            if (this.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)) {
+                recordAudio()
+            } else {
+                Toast.makeText(this, "No Microphone available on this device.", Toast.LENGTH_LONG)
+                    .show()
+            }
+        } else {
+            if (this.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)) {
+                stopRecord()
+            } else {
+                Toast.makeText(this, "No Microphone available on this device.", Toast.LENGTH_LONG)
+                    .show()
+            }
+        }
     }
 
     override fun OnPermissionPermanentlyDenied() {
-        TODO("Not yet implemented")
+        ShowPrompt(true)
     }
+
+
+
 
 
     /*override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
